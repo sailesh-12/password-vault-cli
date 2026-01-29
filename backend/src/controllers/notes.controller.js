@@ -1,63 +1,95 @@
 import passwordModel from "../models/passwordModel.js";
-import Crypto from 'crypto-js';
-export const createPost=async (req , res)=>{
-	try{
-		const {title,content,password}=req.body;
-		
-		if(!title || !content || !password	){
-			return res.status(400).json({
-				message:"User is not found"
-			});
-		}
 
-		const user=req.user;
-		if(!user){
-			return res.status(401).json({
-				message:"Unauthorized"
-			})
-		}
+/**
+ * Create a new password entry
+ * Server stores ONLY the encrypted blob - never decrypts
+ */
+export const createNote = async (req, res) => {
+    try {
+        const { label, ciphertext, iv, authTag } = req.body;
 
-		const id=user._id;
-		const notes=await passwordModel.create({
-			title,
-			content,
-			password: Crypto.AES.encrypt(password, process.env.SECRET_KEY).toString(),
-			userId:id
-		});
+        // Validate required fields
+        if (!label || !ciphertext || !iv || !authTag) {
+            return res.status(400).json({
+                message: "Missing required fields: label, ciphertext, iv, authTag"
+            });
+        }
 
-		return res.status(200).json({
-			message:"Password created successfully",
-			notes
-		});
-	
-	}
-	catch(err){
-		console.log(err.message);
-	}
-}
+        const user = req.user;
+        if (!user) {
+            return res.status(401).json({
+                message: "Unauthorized"
+            });
+        }
 
-export const getAllNotes=async (req,res)=>{
-	try{
-		const existingPasswords=await passwordModel.find();
-		if(!existingPasswords){
-			return res.status(401).json({
-				message:"No password exits"
-			})
-		}
+        // Check for duplicate label
+        const existing = await passwordModel.findOne({
+            userId: user._id,
+            label
+        });
+        if (existing) {
+            return res.status(409).json({
+                message: `Entry with label "${label}" already exists`
+            });
+        }
 
-		return res.status(200).json({
-			message:"Password Details for user",
-			existingPasswords
-		})	;
-	}
-	catch(err){
-		console.log(err);
-		return res.status(500).json({
-			message:"Internal Server error"
-		})
-	}
-}
+        // Store encrypted blob - server never decrypts
+        const entry = await passwordModel.create({
+            label,
+            ciphertext,
+            iv,
+            authTag,
+            userId: user._id
+        });
 
+        return res.status(201).json({
+            message: "Entry created successfully",
+            entry: {
+                id: entry._id,
+                label: entry.label,
+                createdAt: entry.createdAt
+            }
+        });
+    } catch (err) {
+        console.error("createNote error:", err.message);
+        return res.status(500).json({
+            message: "Internal Server error"
+        });
+    }
+};
+
+/**
+ * Get all entries for the authenticated user
+ * Returns encrypted blobs - client decrypts
+ */
+export const getUserNotes = async (req, res) => {
+    try {
+        const user = req.user;
+        if (!user) {
+            return res.status(401).json({
+                message: "Unauthorized"
+            });
+        }
+
+        const entries = await passwordModel.find({ userId: user._id })
+            .select('label ciphertext iv authTag createdAt updatedAt')
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            message: "Entries retrieved successfully",
+            entries
+        });
+    } catch (err) {
+        console.error("getUserNotes error:", err.message);
+        return res.status(500).json({
+            message: "Internal Server error"
+        });
+    }
+};
+
+/**
+ * Get a single entry by ID
+ */
 export const getNoteById = async (req, res) => {
     try {
         const { id } = req.params;
@@ -69,30 +101,36 @@ export const getNoteById = async (req, res) => {
             });
         }
 
-        const note = await passwordModel.findOne({ _id: id, userId: user._id });
+        const entry = await passwordModel.findOne({
+            _id: id,
+            userId: user._id
+        });
 
-        if (!note) {
+        if (!entry) {
             return res.status(404).json({
-                message: "Note not found"
+                message: "Entry not found"
             });
         }
 
         return res.status(200).json({
-            message: "Note retrieved successfully",
-            note
+            message: "Entry retrieved successfully",
+            entry
         });
     } catch (err) {
-        console.log(err.message);
+        console.error("getNoteById error:", err.message);
         return res.status(500).json({
             message: "Internal Server error"
         });
     }
 };
 
+/**
+ * Update an existing entry
+ */
 export const updateNote = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, content, password } = req.body;
+        const { label, ciphertext, iv, authTag } = req.body;
         const user = req.user;
 
         if (!user) {
@@ -101,37 +139,85 @@ export const updateNote = async (req, res) => {
             });
         }
 
+        // Build update object with only provided fields
         const updateData = {};
-        if (title) updateData.title = title;
-        if (content) updateData.content = content;
-        if (password) {
-            updateData.password = Crypto.AES.encrypt(password, process.env.SECRET_KEY).toString();
-        }
+        if (label) updateData.label = label;
+        if (ciphertext) updateData.ciphertext = ciphertext;
+        if (iv) updateData.iv = iv;
+        if (authTag) updateData.authTag = authTag;
 
-        const updatedNote = await passwordModel.findOneAndUpdate(
+        const updatedEntry = await passwordModel.findOneAndUpdate(
             { _id: id, userId: user._id },
             updateData,
             { new: true }
         );
 
-        if (!updatedNote) {
+        if (!updatedEntry) {
             return res.status(404).json({
-                message: "Note not found"
+                message: "Entry not found"
             });
         }
 
         return res.status(200).json({
-            message: "Note updated successfully",
-            note: updatedNote
+            message: "Entry updated successfully",
+            entry: updatedEntry
         });
     } catch (err) {
-        console.log(err.message);
+        console.error("updateNote error:", err.message);
         return res.status(500).json({
             message: "Internal Server error"
         });
     }
 };
 
+/**
+ * Update an existing entry by Label
+ */
+export const updateNoteByLabel = async (req, res) => {
+    try {
+        const { label } = req.params;
+        const { ciphertext, iv, authTag } = req.body;
+        const user = req.user;
+
+        if (!user) {
+            return res.status(401).json({
+                message: "Unauthorized"
+            });
+        }
+
+        // Build update object with only provided fields
+        const updateData = {};
+        if (ciphertext) updateData.ciphertext = ciphertext;
+        if (iv) updateData.iv = iv;
+        if (authTag) updateData.authTag = authTag;
+
+        const updatedEntry = await passwordModel.findOneAndUpdate(
+            { label: label, userId: user._id },
+            updateData,
+            { new: true }
+        );
+
+        if (!updatedEntry) {
+            return res.status(404).json({
+                message: "Entry not found"
+            });
+        }
+
+        return res.status(200).json({
+            message: "Entry updated successfully",
+            entry: updatedEntry
+        });
+    } catch (err) {
+        console.error("updateNoteByLabel error:", err.message);
+        return res.status(500).json({
+            message: "Internal Server error"
+        });
+    }
+};
+
+/**
+ * Delete an entry
+ */
 export const deleteNote = async (req, res) => {
     try {
         const { id } = req.params;
@@ -143,82 +229,42 @@ export const deleteNote = async (req, res) => {
             });
         }
 
-        const deletedNote = await passwordModel.findOneAndDelete({
+        const deletedEntry = await passwordModel.findOneAndDelete({
             _id: id,
             userId: user._id
         });
 
-        if (!deletedNote) {
+        if (!deletedEntry) {
             return res.status(404).json({
-                message: "Note not found"
+                message: "Entry not found"
             });
         }
 
         return res.status(200).json({
-            message: "Note deleted successfully"
+            message: "Entry deleted successfully"
         });
     } catch (err) {
-        console.log(err.message);
+        console.error("deleteNote error:", err.message);
         return res.status(500).json({
             message: "Internal Server error"
         });
     }
 };
 
-export const decryptPassword = async (req, res) => {
+/**
+ * Get all notes (admin use only - returns only labels)
+ */
+export const getAllNotes = async (req, res) => {
     try {
-        const { id } = req.params;
-        const user = req.user;
-
-        if (!user) {
-            return res.status(401).json({
-                message: "Unauthorized"
-            });
-        }
-
-        const note = await passwordModel.findOne({ _id: id, userId: user._id });
-
-        if (!note) {
-            return res.status(404).json({
-                message: "Note not found"
-            });
-        }
-
-        const decryptedPassword = Crypto.AES.decrypt(
-            note.password,
-            process.env.SECRET_KEY
-        ).toString(Crypto.enc.Utf8);
+        const entries = await passwordModel.find()
+            .select('label userId createdAt');
 
         return res.status(200).json({
-            message: "Password decrypted successfully",
-            password: decryptedPassword
+            message: "All entries retrieved",
+            entries
         });
     } catch (err) {
-        console.log(err.message);
-        return res.status(500).json({
-            message: "Internal Server error"
-        });
-    }
-};
-
-export const getUserNotes = async (req, res) => {
-    try {
-        const user = req.user;
-
-        if (!user) {
-            return res.status(401).json({
-                message: "Unauthorized"
-            });
-        }
-
-        const userNotes = await passwordModel.find({ userId: user._id });
-
-        return res.status(200).json({
-            message: "User notes retrieved successfully",
-            notes: userNotes
-        });
-    } catch (err) {
-        console.log(err.message);
+        console.error("getAllNotes error:", err.message);
         return res.status(500).json({
             message: "Internal Server error"
         });

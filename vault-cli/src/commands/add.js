@@ -1,19 +1,21 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { createNote } from '../api/client.js';
+import { createEntry } from '../api/client.js';
 import { encrypt } from '../crypto/encrypt.js';
-import { isLoggedIn, getSession } from '../utils/config.js';
+import { ensureUnlocked } from '../utils/config.js';
 
+/**
+ * Add a new password entry
+ * Encrypts data client-side before sending to server
+ */
 export async function addCommand(label) {
   try {
-    if (!isLoggedIn()) {
-      console.error(chalk.red('Please login first: vault login'));
-      process.exit(1);
-    }
+    // Ensure vault is unlocked (prompts for master password if needed)
+    await ensureUnlocked();
 
-    const session = getSession();
-    if (!session.encryptionKey) {
-      console.error(chalk.red('Vault is locked. Please login again.'));
+    // Validate label
+    if (!label || label.trim().length === 0) {
+      console.error(chalk.red('Label cannot be empty'));
       process.exit(1);
     }
 
@@ -34,6 +36,11 @@ export async function addCommand(label) {
       },
       {
         type: 'input',
+        name: 'url',
+        message: 'URL (optional):',
+      },
+      {
+        type: 'input',
         name: 'notes',
         message: 'Notes (optional):',
       }
@@ -41,21 +48,25 @@ export async function addCommand(label) {
 
     // Prepare data to encrypt
     const dataToEncrypt = JSON.stringify({
-      username: answers.username,
+      username: answers.username || '',
       password: answers.password,
-      notes: answers.notes,
+      url: answers.url || '',
+      notes: answers.notes || '',
       createdAt: new Date().toISOString()
     });
 
-    // Encrypt data client-side
-    const encryptedData = encrypt(dataToEncrypt, session.encryptionKey);
+    // Encrypt data client-side using in-memory key
+    const encryptedData = encrypt(dataToEncrypt, global.encryptionKey);
 
     // Send encrypted blob to backend
-    await createNote(label, encryptedData);
+    console.log(chalk.gray('Saving entry...'));
+    await createEntry(label, encryptedData);
 
     console.log(chalk.green(`\n✓ Entry "${label}" added successfully!\n`));
+
   } catch (error) {
-    console.error(chalk.red('\n✗ Failed to add entry:'), error.response?.data?.message || error.message);
+    const message = error.response?.data?.message || error.message;
+    console.error(chalk.red('\n✗ Failed to add entry:'), message);
     process.exit(1);
   }
 }

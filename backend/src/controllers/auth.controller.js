@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import jsonwebtoken from "jsonwebtoken";
+import crypto from "crypto";
 import authModel from "../models/authModel.js";
 import dotenv from "dotenv";
 
@@ -25,11 +26,15 @@ export const signup = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Generate vault salt for client-side key derivation (32 bytes = 64 hex chars)
+    const vaultSalt = crypto.randomBytes(32).toString('hex');
+
     const newuser = new authModel({
       username,
       email,
       password: hashedPassword,
       date_of_birth,
+      vaultSalt,
     });
 
     const token = jsonwebtoken.sign(
@@ -42,17 +47,21 @@ export const signup = async (req, res) => {
       }
     );
 
-    console.log(token);
-
     await newuser.save();
 
     return res.status(201).json({
       message: "user created",
       token,
-      newuser,
+      vaultSalt,
+      user: {
+        id: newuser._id,
+        username: newuser.username,
+        email: newuser.email,
+      },
     });
   } catch (err) {
     console.error(err.message);
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -96,26 +105,31 @@ export const signin = async (req, res) => {
     return res.status(200).json({
       message: "Login successful",
       token: token,
-      existinguser,
+      vaultSalt: existinguser.vaultSalt,
+      user: {
+        id: existinguser._id,
+        username: existinguser.username,
+        email: existinguser.email,
+      },
     });
   } catch (err) {
     console.log(err.message);
   }
 };
 
-export const logout=async (req,res)=>{
-  try{
-    res.clearCookie("token",{
-      httpOnly: true, 
+export const logout = async (req, res) => {
+  try {
+    res.clearCookie("token", {
+      httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "strict",
       maxAge: 24 * 60 * 60 * 1000, // 1 day
     })
     return res.status(200).json({
-      message:"Logout successful"
+      message: "Logout successful"
     })
   }
-  catch(err){
+  catch (err) {
     console.log(err.message);
   }
 }
