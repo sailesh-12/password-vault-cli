@@ -1,7 +1,7 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { loginUser } from '../api/client.js';
-import { saveSession, getSession, isLoggedIn, isVaultUnlocked } from '../utils/config.js';
+import { saveSession, getSession, isLoggedIn, isVaultUnlocked, createMasterPasswordHash, verifyMasterPassword } from '../utils/config.js';
 import { deriveKey } from '../crypto/deriveKey.js';
 
 /**
@@ -29,6 +29,12 @@ export async function loginCommand() {
           validate: input => input.length >= 1 || 'Password cannot be empty'
         }
       ]);
+
+      // Verify master password before deriving key
+      if (!verifyMasterPassword(masterAnswer.masterPassword, session.salt)) {
+        console.error(chalk.red('\n✗ Incorrect master password. Please try again.\n'));
+        process.exit(1);
+      }
 
       // Derive encryption key using stored salt
       const encryptionKey = deriveKey(masterAnswer.masterPassword, session.salt);
@@ -90,8 +96,12 @@ export async function loginCommand() {
     console.log(chalk.gray('Deriving encryption key...'));
     const encryptionKey = deriveKey(masterAnswer.masterPassword, vaultSalt);
 
+    // Create master password hash for verification on future unlocks
+    const masterPasswordHash = createMasterPasswordHash(masterAnswer.masterPassword, vaultSalt);
+
     // Save session - key goes to memory only, not disk
-    saveSession(token, vaultSalt, encryptionKey);
+    // Master password hash is stored for verification
+    saveSession(token, vaultSalt, encryptionKey, masterPasswordHash);
 
     console.log(chalk.green('\n✓ Login successful! Vault unlocked.\n'));
 

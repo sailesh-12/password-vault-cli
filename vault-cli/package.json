@@ -1,6 +1,6 @@
 {
   "name": "@saileshs/vault-cli",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "description": "Zero-knowledge password manager CLI - client-side encryption only",
   "main": "src/index.js",
   "type": "module",
